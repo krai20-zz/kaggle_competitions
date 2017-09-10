@@ -13,23 +13,30 @@ import logging
 import time
 
 sample_size = 1000000
+# combination of learning_rate and subsample are used for regularization/
+# controlling overfitting
 learning_rate = 0.1
 subsample = 0.5
-estimators = 10
+estimators = 100
 target_var = 'trip_duration'
 features = [
     'vendor_id',
     # 'avg_speed',
+    'pickup_hour',
     'is_weekday',
-    'is_morning',
-    'is_afternoon',
-    'is_evening',
-    'is_early_morning',
+    # 'is_morning',
+    # 'is_afternoon',
+    # 'is_evening',
+    # 'is_early_morning',
     'dist_kms',
     'passenger_count_0',
     'passenger_count_between_1_6',
     'passenger_count_between_7_9',
-    'store_and_fwd_flag_is_N'
+    'store_and_fwd_flag_is_N',
+    'pickup_longitude',
+    'pickup_latitude',
+    'dropoff_longitude',
+    'dropoff_latitude'
     ]
 
 def read_data(filename):
@@ -182,6 +189,25 @@ def preprocesss(df):
 
     return df
 
+def get_feature_importance(reg):
+    importances = reg.feature_importances_
+    importances = 100.0 * (importances / importances.max())
+    imp_df = pd.DataFrame({
+                    'features':features,
+                    'relative_importances': importances,
+                    })
+    return imp_df
+
+def plot_feature_imp(imp_df):
+    imp_df = imp_df.sort_values('relative_importances', ascending=False)
+    imp_df = imp_df.reset_index().drop('index', axis=1)
+    sns_plot = sns.barplot(x=imp_df['relative_importances'], y=imp_df['features'])
+    # plt.bar(, imp_df.index, orientation='horizontal')
+    # plt.yticks(imp_df.index, , rotation=45)
+    plt.tight_layout()
+    plt.subplots_adjust(left=0.5)
+    plt.savefig('../plots/feature_importances')
+
 def main():
     # read data
     print 'reading data'
@@ -217,6 +243,9 @@ def main():
     fit(reg, train_data, train_target)
     print 'time taken', time.time() - start_time
 
+    # plot feature important
+    imp_df = get_feature_importance(reg)
+    plot_feature_imp(imp_df)
 
     # predict and report metrics for test data
     print 'predicting tagets for test data'
@@ -229,7 +258,7 @@ def main():
     kaggle_test_data = read_data(kaggle_test_file)
     kaggle_test_df = preprocesss(kaggle_test_data)
     submission_df = predict_kaggle_test_data(reg, kaggle_test_df)
-    submission_df.to_csv('../data/submission_data.csv', index=False)
+    submission_df.to_csv('../data/submission_data1.csv', index=False)
 
 if __name__ == "__main__":
     main()

@@ -23,7 +23,8 @@ features = [
     'vendor_id',
     # 'avg_speed',
     'pickup_hour',
-    'is_weekday',
+    # 'is_weekday',
+    'pickup_day',
     # 'is_morning',
     # 'is_afternoon',
     # 'is_evening',
@@ -98,11 +99,31 @@ def haversine_distance(row):
     km = 6367 * c
     return km
 
+def bearing_array(row):
+    lon1, lat1, lon2, lat2 = map(radians, [
+        row['pickup_longitude'],
+        row['pickup_latitude'],
+        row['dropoff_longitude'],
+        row['dropoff_latitude']
+        ])
+    AVG_EARTH_RADIUS = 6371  # in km
+    lon_delta_rad = np.radians(lon2 - lon1)
+    lat1, lon1, lat2, lon2 = map(np.radians, (lat1, lon1, lat2, lon2))
+    y = np.sin(lon_delta_rad) * np.cos(lat2)
+    x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(lon_delta_rad)
+    return np.degrees(np.arctan2(y, x))
+
 def get_distance(df):
     """
     Calculates distance between pickup and dropoff destinations
     """
     df['dist_kms'] = df.apply(haversine_distance, axis=1)
+    return df
+
+def get_diretion(df):
+    """ Calculates bearing (direction) in degrees
+    """
+    df['direction'] = df.apply(bearing_array, axis=1)
     return df
 
 def get_passenger_count_features(df):
@@ -178,6 +199,7 @@ def preprocesss(df):
     df = get_weekday_features(df)
     df = get_tod_features(df)
     df = get_distance(df)
+    df = get_diretion(df)
     # df = get_avg_speed(df)
     df = get_passenger_count_features(df)
     df = get_store_flag_feature(df)
@@ -202,11 +224,37 @@ def plot_feature_imp(imp_df):
     imp_df = imp_df.sort_values('relative_importances', ascending=False)
     imp_df = imp_df.reset_index().drop('index', axis=1)
     sns_plot = sns.barplot(x=imp_df['relative_importances'], y=imp_df['features'])
-    # plt.bar(, imp_df.index, orientation='horizontal')
-    # plt.yticks(imp_df.index, , rotation=45)
     plt.tight_layout()
     plt.subplots_adjust(left=0.5)
     plt.savefig('../plots/feature_importances')
+
+def train_xgboost(train_data, test_data, train_target, test_target):
+    d_train = xgb.DMatrix(train_data, label=train_target)
+    d_test = xgb.DMatrix(test_data, label=test_target)
+    watchlist = [(d_train, 'train'), (d_test, 'test')]
+
+    xgb_pars = {'min_child_weight': 50, 'eta': 0.3, 'colsample_bytree': 0.3,
+                'max_depth': 10, 'subsample': 0.8, 'lambda': 1., 'nthread': -1,
+                'booster' : 'gbtree', 'silent': 1, 'eval_metric': 'rmse',
+                'objective': 'reg:linear'}
+
+    model = xgb.train(xgb_pars, d_train, 200, watchlist, early_stopping_rounds=50,
+                      maximize=False, verbose_eval=10)
+
+    print "xgb model results", model
+    return model
+
+def get_xgb_submissions(kaggle_test_data, model):
+    ids = kaggle_test_data['id'].tolist()
+    kaggle_test_data = kaggle_test_data[features]
+    kaggle_test_matrix = xgb.DMatrix(kaggle_test_data)
+    pred_target = model.predict(kaggle_test_matrix)
+    submission_df = pd.DataFrame(pred_target, ids).reset_index().rename(
+                        columns={'index':'id', 0:'trip_duration'})
+    submission_df['trip_duration'] = np.exp(submission_df['trip_duration']) - 1
+    print "writing submissions file"
+    submission_df.to_csv('../data/xgb_submissions.csv', index=False)
+    print "Done writing submissions file"
 
 def main():
     # read data
@@ -226,39 +274,46 @@ def main():
     # split train and test data
     train_data, test_data, train_target, test_target = split_train_test(df)
 
-    # get regressor
-    reg = get_regressor()
+    # # get regressor
+    # reg = get_regressor()
+    #
+    # # get cross validated r2_scores
+    # print 'running cross validation'
+    # start_time = time.time()
+    # r2_scores, mean_squared_scores = get_cv_scores(reg, train_data, train_target)
+    # print 'cross validated r2 scores', r2_scores, np.mean(r2_scores)
+    # print 'cross validated rmse', mean_squared_scores, np.mean(mean_squared_scores)
+    # print 'time taken', time.time() - start_time
+    #
+    # # fit data
+    # print 'Fitting data'
+    # start_time = time.time()
+    # fit(reg, train_data, train_target)
+    # print 'time taken', time.time() - start_time
+    #
+    # # plot feature important
+    # imp_df = get_feature_importance(reg)
+    # plot_feature_imp(imp_df)
+    #
+    # # predict and report metrics for test data
+    # print 'predicting targets for test data'
+    # rmse = predict_n_measure(reg, test_data, test_target)
+    # print "test set rmse", rmse
 
-    # get cross validated r2_scores
-    print 'running cross validation'
-    start_time = time.time()
-    r2_scores, mean_squared_scores = get_cv_scores(reg, train_data, train_target)
-    print 'cross validated r2 scores', r2_scores, np.mean(r2_scores)
-    print 'cross validated rmse', mean_squared_scores, np.mean(mean_squared_scores)
-    print 'time taken', time.time() - start_time
-
-    # fit data
-    print 'Fitting data'
-    start_time = time.time()
-    fit(reg, train_data, train_target)
-    print 'time taken', time.time() - start_time
-
-    # plot feature important
-    imp_df = get_feature_importance(reg)
-    plot_feature_imp(imp_df)
-
-    # predict and report metrics for test data
-    print 'predicting tagets for test data'
-    rmse = predict_n_measure(reg, test_data, test_target)
-    print "test set rmse", rmse
+    # train xgboost
+    model = train_xgboost(train_data, test_data, train_target, test_target)
 
     # predict and report metrics for validation data
     # get validation set
+    print "Reading test data"
     kaggle_test_file = '../data/test.zip'
     kaggle_test_data = read_data(kaggle_test_file)
     kaggle_test_df = preprocesss(kaggle_test_data)
-    submission_df = predict_kaggle_test_data(reg, kaggle_test_df)
-    submission_df.to_csv('../data/submission_data1.csv', index=False)
+    # submission_df = predict_kaggle_test_data(reg, kaggle_test_df)
+    # submission_df.to_csv('../data/submission_data2.csv', index=False)
+    print "fitting test data"
+    get_xgb_submissions(kaggle_test_data, model)
+
 
 if __name__ == "__main__":
     main()

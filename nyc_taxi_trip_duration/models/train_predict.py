@@ -15,6 +15,8 @@ from build_features import preprocess
 
 SAMPLE_SIZE = 1000000
 TARGET_VAR = 'trip_duration'
+
+#features to be used for modeling
 FEATURES = [
     'vendor_id',
     'pickup_hour',
@@ -29,6 +31,16 @@ FEATURES = [
     'direction'
     ]
 
+# parameters for gradient boosting regression
+# combination of learning_rate and subsample are used for regularization/
+# controlling overfitting
+GBR_PARAMS = {
+    'learning_rate':0.1,
+    'subsample':0.5,
+    'n_estimators':100
+    }
+
+#parameters for xgboost regression
 XGB_PARAMS = {
     'min_child_weight':50,
     'colsample_bytree':0.3,
@@ -38,14 +50,6 @@ XGB_PARAMS = {
     'silent':1,
     'eval_metric':'rmse',
     'objective': 'reg:linear'
-    }
-
-# combination of learning_rate and subsample are used for regularization/
-# controlling overfitting
-GBR_PARAMS = {
-    'learning_rate':0.1,
-    'subsample':0.5,
-    'n_estimators':100
     }
 
 def read_data(filename):
@@ -65,7 +69,7 @@ def get_regressor():
 
 def get_cv_scores(reg, train_data, train_target):
     """
-        Returns cross validated R squared scores
+        Returns cross validated R squared scores and root mean squared log error (RMSE)
     """
     scorer = make_scorer(r2_score, multioutput='variance_weighted')
     r2_scores = cross_val_score(reg, train_data, train_target, cv=4,
@@ -145,7 +149,7 @@ def train_xgboost(train_data, test_data, train_target, test_target):
     model = xgb.train(XGB_PARAMS, d_train, 200, watchlist, early_stopping_rounds=50,
                       maximize=False, verbose_eval=10)
 
-    print "xgb model results", model
+    print "XGB model results", model
     return model
 
 def get_xgb_submissions(kaggle_test_data, model, filename):
@@ -159,16 +163,16 @@ def get_xgb_submissions(kaggle_test_data, model, filename):
     submission_df = pd.DataFrame(pred_target, ids).reset_index().rename(
                         columns={'index':'id', 0:'trip_duration'})
     submission_df['trip_duration'] = np.exp(submission_df['trip_duration']) - 1
-    print "writing submissions file"
+    print "Writing submissions file"
     submission_df.to_csv(filename, index=False)
     print "Done writing submissions file"
 
 if __name__ == "__main__":
     # read data
-    print 'reading data'
+    print 'Reading data'
     filename = '../data/train.zip'
     df = read_data(filename)
-    print 'done reading data'
+    print 'Done reading data'
 
     df = df.sample(SAMPLE_SIZE)
 
@@ -178,43 +182,46 @@ if __name__ == "__main__":
     # split train and test data
     train_data, validation_data, train_target, validation_target = split_train_test(df)
 
+    print "Training Gradient Boosting Regression Model"
     # get regressor
     reg = get_regressor()
 
     # get cross validated r2_scores
-    print 'running cross validation'
+    print 'Running cross validation'
     start_time = time.time()
     r2_scores, mean_squared_scores = get_cv_scores(reg, train_data, train_target)
-    print 'cross validated r2 scores', r2_scores, np.mean(r2_scores)
-    print 'cross validated rmse', mean_squared_scores, np.mean(mean_squared_scores)
-    print 'time taken', time.time() - start_time
+    print 'Cross validated R squared scores:', r2_scores, np.mean(r2_scores)
+    print 'Cross validated RMSE:', mean_squared_scores, np.mean(mean_squared_scores)
+    print 'Time taken:', time.time() - start_time
 
     # fit data
     print 'Fitting data'
     start_time = time.time()
     fit(reg, train_data, train_target)
-    print 'time taken', time.time() - start_time
+    print 'Time taken:', time.time() - start_time
 
     # plot feature important
+    print 'Plotting feature importance scores'
     imp_df = get_feature_importance(reg)
     plot_feature_imp(imp_df)
 
-    # predict and report metrics for validation  set
-    print 'predicting targets for validation data'
+    # predict and report metrics for validation set
+    print 'Predicting targets for validation data'
     rmse = predict_n_measure(reg, validation_data, validation_target)
-    print "validation set rmse", rmse
+    print "Gradient boosting validation set rmse:", rmse
 
     # train xgboost
-    # model = train_xgboost(train_data, test_data, train_target, test_target)
-    #
-    # # predict and report metrics for validation data
-    # # get validation set
-    # print "Reading test data"
-    # kaggle_test_file = '../data/test.zip'
-    # kaggle_test_data = read_data(kaggle_test_file)
-    # kaggle_test_df = preprocess(kaggle_test_data)
-    # submission_df = predict_kaggle_test_data(reg, kaggle_test_df)
-    # submission_df.to_csv('../data/submission_data_gb.csv', index=False)
-    # print "fitting test data"
-    # xgb_submission_filename = '../data/xgb_submissions.csv'
-    # get_xgb_submissions(kaggle_test_data, model, xgb_submission_filename)
+    print "------------------------------------------------------------------"
+    print "Training XGBOOST Model"
+    model = train_xgboost(train_data, validation_data, train_target, validation_target)
+
+    # make predictions for kaggle test data
+    print "Reading test data"
+    kaggle_test_file = '../data/test.zip'
+    kaggle_test_data = read_data(kaggle_test_file)
+    kaggle_test_df = preprocess(kaggle_test_data)
+    submission_df = predict_kaggle_test_data(reg, kaggle_test_df)
+    submission_df.to_csv('../data/submission_data_gb.csv', index=False)
+    print "Fitting test data"
+    xgb_submission_filename = '../data/xgb_submissions.csv'
+    get_xgb_submissions(kaggle_test_data, model, xgb_submission_filename)

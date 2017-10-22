@@ -144,5 +144,4 @@ def preprocess(df):
         df = get_log_trip_duration(df)
     except KeyError:
         pass
-
     return df
